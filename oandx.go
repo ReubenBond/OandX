@@ -4,53 +4,74 @@ import (
 	"⚛sdl"
 	"⚛sdl/ttf"
 	"⚛sdl/mixer"
-	"math"
 	"fmt"
 	"time"
 	"path"
+	//	"os"
 )
 
 const APP_VERSION = "0.1"
 const SCREEN_WIDTH = 224
 const SCREEN_HEIGHT = 224
-const GFX_DIR = "gfx"
-
-type Point struct {
-	x int
-	y int
-}
-
-func (a Point) add(b Point) Point { return Point{a.x + b.x, a.y + b.y} }
-
-func (a Point) sub(b Point) Point { return Point{a.x - b.x, a.y - b.y} }
-
-func (a Point) length() float64 { return math.Sqrt(float64(a.x*a.x + a.y*a.y)) }
-
-func (a Point) mul(b float64) Point {
-	return Point{int(float64(a.x) * b), int(float64(a.y) * b)}
-}
+//var WORKING_DIR, _ = os.Getwd()
+var GFX_DIR string = "gfx"
 
 // Resource manager
-var gfxResources map[string]*sdl.Surface
-// Load an image from disk, returning a pointer to the SDL surface
+var gfxResources = make(map[string]*sdl.Surface)
+
+// Get an image, returning a pointer to the SDL surface
 // it was loaded into and true if successful, nil and false otherwise
-func GetImage(fileName string) (image *sdl.Surface, success bool) {
-	if image, ok := gfxResources[fileName]; !ok {
+func GetImage(fileName string) (image *sdl.Surface, ok bool) {
+	// Reuse existing surface if image has been loaded previously
+	if image, ok = gfxResources[fileName]; !ok {
 		// Image hasn't been loaded previously
-		fmt.Println("GetImage","Loading image", fileName)
 		image = sdl.Load(fileName)
+		// Optimise surface for display
+		image.DisplayFormat()
 		if image != nil {
+			// Image successfully loaded, store resource in
+			// gfxResources for future reference
 			gfxResources[fileName] = image
-			success = true
+			ok = true
 		}
 	}
-	return image, success
+	return image, ok
 }
 
+// Get an image or panic
+func MustGetImage(fileName string) *sdl.Surface {
+	image, ok := GetImage(fileName)
+	if !ok {
+		panic("MustGetImage:"+" Failed to load "+fileName)
+	}
+	return image
+}
+
+// Free an image by its file name
+func FreeImageByName(fileName string) {
+	if image, ok := gfxResources[fileName]; ok {
+		image.Free()
+	}
+	gfxResources[fileName] = nil, false
+}
+
+// Free an image by its handle
+func FreeImage(image *sdl.Surface) {
+	for k, v := range gfxResources {
+		if v == image {
+			v.Free()
+			gfxResources[k] = nil, false
+			break
+		}
+	}
+}
+
+// Free all managed resources
 func FreeResources() {
-	// Free all image resources
-	for _, v := range(gfxResources) {
+	// Free all managed image resources
+	for k, v := range gfxResources {
 		v.Free()
+		gfxResources[k] = nil, false
 	}
 }
 
@@ -58,13 +79,13 @@ func FreeResources() {
 type TileSymbol int
 
 const (
-	Empty = iota
+	Empty  = iota
 	Naught = iota
-	Cross = iota
+	Cross  = iota
 )
 
-var TileSymbols = []string {"Empty", "Naught", "Cross"}
-var TileImageNames = []string  {"empty.png", "o.png", "x.png"}
+var TileSymbols = []string{"Empty", "Naught", "Cross"}
+var TileImageNames = []string{"empty.png", "o.png", "x.png"}
 var BackgroundImageName = "grid.png"
 
 func (tile TileSymbol) String() string {
@@ -92,74 +113,94 @@ func NewGameBoard() (board GameBoard) {
 }
 
 func (board GameBoard) Winner() (winner TileSymbol, won bool) {
-	type scanDef struct {x, y, xDiff, yDiff int}
+	type scanDef struct {
+		x, y, xDiff, yDiff int
+	}
 	scanners := []scanDef{
-		{0, 0, 1, 0}, // Across from top
-		{0, 1, 1, 0}, // Across from middle
-		{0, 2, 1, 0}, // Across from bottom
-		{0, 0, 0, 1}, // Down from left
-		{1, 0, 0, 1}, // Down from middle
-		{2, 0, 0, 1}, // Down from right
-		{0, 0, 1, 1}, // Diagonally from top-left
+		{0, 0, 1, 0},  // Across from top
+		{0, 1, 1, 0},  // Across from middle
+		{0, 2, 1, 0},  // Across from bottom
+		{0, 0, 0, 1},  // Down from left
+		{1, 0, 0, 1},  // Down from middle
+		{2, 0, 0, 1},  // Down from right
+		{0, 0, 1, 1},  // Diagonally from top-left
 		{0, 2, 1, -1}} // Diagonally from bottom-left
-	for _, scanner := range(scanners) {
-		func () {
+	for _, scanner := range scanners {
+		winner, won = func() (TileSymbol, bool) {
 			naughts, crosses := 0, 0
-			for x := scanner.x; x < 3; x += scanner.xDiff {
-				for y := scanner.y; y < 3; y += scanner.yDiff {
-					switch (*board[x][y]) {
-					case Naught:
-						naughts++
-					case Cross:
-						crosses++
-					}
+			for x, y := scanner.x, scanner.y;
+					x < len(board) && y < len(board[0]);
+					x, y = x+scanner.xDiff, y+scanner.yDiff {
+				switch *board[x][y] {
+				case Naught:
+					naughts++
+				case Cross:
+					crosses++
 				}
 			}
-			switch (3) {
+			switch 3 {
 			case naughts:
-				winner = Naught
-				won = true
+				return Naught, true
 			case crosses:
-				winner = Cross
-				won = true
+				return Cross, true
 			default:
-				winner = Empty
-				won = false
+				return Empty, false
 			}
-			return
+			return Empty, false
 		}()
+		if won {
+			return winner, won
+		}
 	}
 	return
 }
 
 func ScreenToBoard(xScreen, yScreen int) (x, y int) {
 	gridDim := SCREEN_WIDTH / 3
-	x, y = xScreen / gridDim, yScreen / gridDim
+	x, y = xScreen/gridDim, yScreen/gridDim
 	return
 }
 
 func BoardToScreen(x, y int) (xScreen, yScreen int) {
 	gridDim := SCREEN_WIDTH / 3
-	xScreen, yScreen = x * gridDim, y * gridDim
+	xScreen, yScreen = x*gridDim, y*gridDim
 	return
 }
 
-func (board GameBoard) PlaceTile(tile TileSymbol, xScreen, yScreen int) (success bool){
+func (board GameBoard) PlaceTile(tile TileSymbol, xScreen, yScreen int) (success bool) {
 	x, y := ScreenToBoard(xScreen, yScreen)
-	fmt.Println("Place",tile.String(),"at:",x,y)
 	if *board[x][y] == Empty {
 		success = true
 		*board[x][y] = tile
 	}
 	return
 }
-var background, emptyTile, naughtTile, crossTile *sdl.Surface
+
+var screen *sdl.Surface
+var background *sdl.Surface
+var tiles [3]*sdl.Surface
+
+func (tile *TileSymbol) Sprite() (image *sdl.Surface, ok bool) {
+	switch *tile {
+	case Empty:
+		return tiles[Empty], true
+	case Naught:
+		return tiles[Naught], true
+	case Cross:
+		return tiles[Cross], true
+	}
+	return
+}
+
 func (board GameBoard) Draw(screen *sdl.Surface) {
-	screen.Blit(&sdl.Rect{0,0,0,0}, background, nil)
+	screen.Blit(&sdl.Rect{0, 0, 0, 0}, background, nil)
 	for x := 0; x < len(board); x++ {
-		for y:= 0; y < len(board[0]); y++ {
+		for y := 0; y < len(board[0]); y++ {
 			xScreen, yScreen := BoardToScreen(x, y)
-			screen.Blit(&sdl.Rect{xScreen, yScreen, 0, 0}, board[x][y]
+			image, ok := board[x][y].Sprite()
+			if ok {
+				screen.Blit(&sdl.Rect{int16(xScreen), int16(yScreen), 0, 0}, image, nil)
+			}
 		}
 	}
 }
@@ -172,18 +213,30 @@ func init() {
 	if ttf.Init() != 0 {
 		panic(sdl.GetError())
 	}
-
-	// Form resource paths
-	for i, rsrc := range(TileImageNames) {
-		TileImageNames[i] = path.Join(GFX_DIR, rsrc)
-		fmt.Println("Tile",i,"is",TileImageNames[i])
+	if mixer.OpenAudio(mixer.DEFAULT_FREQUENCY, mixer.DEFAULT_FORMAT,
+		mixer.DEFAULT_CHANNELS, 4096) != 0 {
+		panic(sdl.GetError())
 	}
+	sdl.EnableUNICODE(1)
+	sdl.WM_SetCaption("OandX - "+APP_VERSION, "")
+	screen = sdl.SetVideoMode(SCREEN_WIDTH, SCREEN_HEIGHT, 32, sdl.RESIZABLE)
+	if screen == nil {
+		panic(sdl.GetError())
+	}
+
+	// Form resource paths and load resources
 	BackgroundImageName = path.Join(GFX_DIR, BackgroundImageName)
+	background = MustGetImage(BackgroundImageName)
+	for i, rsrc := range TileImageNames {
+		TileImageNames[i] = path.Join(GFX_DIR, rsrc)
+		tiles[i] = MustGetImage(TileImageNames[i])
+		fmt.Println("Tile", i, "is", TileImageNames[i])
+	}
 }
 
 func deinit() {
-	sdl.Quit();
-	ttf.Quit();
+	sdl.Quit()
+	ttf.Quit()
 }
 
 func main() {
@@ -191,39 +244,30 @@ func main() {
 	// Clean up when we quit
 	defer deinit()
 
-	if mixer.OpenAudio(mixer.DEFAULT_FREQUENCY, mixer.DEFAULT_FORMAT,
-		mixer.DEFAULT_CHANNELS, 4096) != 0 {
-		panic(sdl.GetError())
-	}
+	/*background = sdl.Load("gfx/grid.png")
+	tiles[0] = sdl.Load("gfx/empty.png")
+	tiles[1] = sdl.Load("gfx/o.png")
+	tiles[2] = sdl.Load("gfx/x.png")
+*/
+	/*	if image == nil {
+			panic(sdl.GetError())
+		}
+		defer image.Free()
 
-	var screen = sdl.SetVideoMode(SCREEN_WIDTH, SCREEN_HEIGHT, 32, sdl.RESIZABLE)
-
-	if screen == nil {
-		panic(sdl.GetError())
-	}
-
-	sdl.EnableUNICODE(1)
-
-	sdl.WM_SetCaption("TinyTanks - "+APP_VERSION, "")
-	image := sdl.Load("gfx/o.png")
-	if image == nil {
-		panic(sdl.GetError())
-	}
-	defer image.Free()
-
-	sdl.WM_SetIcon(image, nil)
-
+	*/
+	sdl.WM_SetIcon(tiles[Cross], nil)
 	running := true
 
-	font := ttf.OpenFont("Fontin Sans.otf", 72)
+	font := ttf.OpenFont("Fontin Sans.otf", 36)
 	if font == nil {
 		panic(sdl.GetError())
 	}
 	defer font.Close()
 
 	font.SetStyle(ttf.STYLE_UNDERLINE)
-	white := sdl.Color{255, 255, 255, 0}
-	text := ttf.RenderText_Blended(font, "Test (with music)", white)
+	red := sdl.Color{255, 0, 0, 0}
+	text := &sdl.Surface{}
+	//ttf.RenderText_Blended(font, "Have fun!", red)
 	music := mixer.LoadMUS("test.ogg")
 
 	if music == nil {
@@ -236,10 +280,7 @@ func main() {
 	if sdl.GetKeyName(270) != "[+]" {
 		panic("GetKeyName broken")
 	}
-	ticker := time.NewTicker(1e9/50 /*50Hz*/)
-
-	var draw = make(chan Point, 10)
-	var out = make(chan Point, 10)
+	ticker := time.NewTicker(1e9 / 50 /*50Hz*/ )
 
 	board := NewGameBoard()
 	tile := TileSymbol(Naught)
@@ -250,24 +291,11 @@ func main() {
 	for running {
 		select {
 		case <-ticker.C: // Redraw
-			screen.FillRect(nil, 0x302019)
+			screen.FillRect(nil, 0xFFFFFF)
 			board.Draw(screen)
-			//screen.Blit(&sdl.Rect{0, 0, 0, 0}, text, nil)
-			/*draw <- Point{100,100}
-			loop: for {
-				select {
-				case p := <-draw:
-					screen.Blit(&sdl.Rect{int16(p.x), int16(p.y), 0, 0}, image, nil)
-				case <-out:
-				default:
-					break loop
-				}
-			}
-			var p Point
-			sdl.GetMouseState(&p.x, &p.y)
-			*/
+			screen.Blit(&sdl.Rect{0, 0, 0, 0}, text, nil)
 			screen.Flip()
-		case _event := <-sdl.Events: // Handle events
+		case _event := <-sdl.Events: // Handle other events
 			switch e := _event.(type) {
 			case sdl.QuitEvent:
 				running = false
@@ -296,9 +324,12 @@ func main() {
 					if board.PlaceTile(tile, int(e.X), int(e.Y)) {
 						tile.Flip()
 					}
-				//	in = out
-				//	out = make(chan Point)
-				//	go worm(in, out, draw)
+					if winner, won := board.Winner(); won {
+						text.Free()
+						winString := winner.String() + " won!!"
+						text = ttf.RenderText_Blended(font, winString, red)
+						fmt.Println(winString)
+					}
 				}
 
 			case sdl.ResizeEvent:
