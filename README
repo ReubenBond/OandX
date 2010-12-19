@@ -1,0 +1,1 @@
+This a simple game written using Go and the ⚛sdl library as an excercise in learning Go and the SDL wrapper (which should be merged into Go-SDL, what the hell is that star thing? It should just be "sdl"!)
